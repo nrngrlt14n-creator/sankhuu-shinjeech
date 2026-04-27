@@ -23,12 +23,12 @@ function maskKeepTail(value: string, keep = 4) {
 function applyMask(
   input: string,
   pattern: RegExp,
-  replacer: (...args: Parameters<string["replace"]>[1] extends (...a: infer A) => string ? A : never) => string
+  replacer: (...args: any[]) => string
 ) {
   let count = 0;
   const output = input.replace(pattern, (...args) => {
     const original = args[0] as string;
-    const masked = replacer(...(args as never));
+    const masked = replacer(...args);
     if (masked !== original) count += 1;
     return masked;
   });

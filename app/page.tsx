@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type ChecklistKey = "sales" | "payroll" | "supplier" | "loan" | "assets" | "bank" | "tax";
+const AUTH_KEY = "admin-auth";
+const LAST_ACTIVITY_KEY = "admin-last-activity";
+const INACTIVITY_TIMEOUT_MS = 8 * 60 * 60 * 1000;
+
+type ChecklistKey = "sales" | "expense" | "bank" | "payroll" | "inventory";
 type TabKey = "checklist" | "report" | "trend" | "inflation" | "loan" | "sales";
 type Trend = "↑" | "↓" | "→";
 type Level = "🔴" | "🟡" | "🟢";
@@ -73,14 +77,66 @@ const fmt = (n: number) => "₮" + Math.round(n).toLocaleString("mn-MN");
 const fmtPct = (n: number) => (Math.round(n * 10) / 10).toFixed(1) + "%";
 const fmtSize = (b: number) => (b < 1048576 ? (b / 1024).toFixed(1) + "KB" : (b / 1048576).toFixed(1) + "MB");
 
-const CHECKLIST_ITEMS: { file: string; key: ChecklistKey }[] = [
-  { file: "Борлуулалтын бүртгэл", key: "sales" },
-  { file: "Цалингийн жагсаалт", key: "payroll" },
-  { file: "Нийлүүлэгчийн нэхэмжлэл", key: "supplier" },
-  { file: "Зээлийн гэрээ / хуваарь", key: "loan" },
-  { file: "Үндсэн хөрөнгийн жагсаалт", key: "assets" },
-  { file: "Банкны хуулга", key: "bank" },
-  { file: "Татварын бүртгэл", key: "tax" },
+const CHECKLIST_ITEMS: {
+  key: ChecklistKey;
+  codeName: string;
+  description: string;
+  required: boolean;
+  section: "required" | "optional";
+  icon: string;
+  iconBg: string;
+  iconColor: string;
+}[] = [
+  {
+    key: "sales",
+    codeName: "01_Борлуулалт.xlsx",
+    description: "Сар бүрийн борлуулалтын бүртгэл (ЗААВАЛ)",
+    required: true,
+    section: "required",
+    icon: "📈",
+    iconBg: "#dbeafe",
+    iconColor: "#1d4ed8",
+  },
+  {
+    key: "expense",
+    codeName: "02_Зарлагын_баримт.xlsx",
+    description: "Зарлага категориор (ЗААВАЛ)",
+    required: true,
+    section: "required",
+    icon: "🧾",
+    iconBg: "#ffedd5",
+    iconColor: "#d97706",
+  },
+  {
+    key: "bank",
+    codeName: "03_Банкны_хуулга.pdf",
+    description: "Банкны хуулга (ЗААВАЛ)",
+    required: true,
+    section: "required",
+    icon: "🏦",
+    iconBg: "#fee2e2",
+    iconColor: "#dc2626",
+  },
+  {
+    key: "payroll",
+    codeName: "04_Цалин.xlsx",
+    description: "Цалингийн жагсаалт (НЭМЭЛТ)",
+    required: false,
+    section: "optional",
+    icon: "👷",
+    iconBg: "#dcfce7",
+    iconColor: "#16a34a",
+  },
+  {
+    key: "inventory",
+    codeName: "05_Бараа_нөөц.xlsx",
+    description: "Нөөцийн тооллого (НЭМЭЛТ)",
+    required: false,
+    section: "optional",
+    icon: "📦",
+    iconBg: "#ede9fe",
+    iconColor: "#6d28d9",
+  },
 ];
 
 const DEMO: ReportData = {
@@ -134,20 +190,21 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   return (
     <div
       style={{
-        background: "var(--color-background-primary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "var(--border-radius-lg)",
-        padding: "1rem 1.25rem",
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 16,
+        padding: "1rem 1.1rem",
         marginBottom: 14,
+        boxShadow: "0 8px 24px rgba(15,23,42,0.05)",
       }}
     >
       <div
         style={{
-          fontWeight: 500,
+          fontWeight: 700,
           fontSize: 14,
-          color: "var(--color-text-primary)",
+          color: "#0f172a",
           marginBottom: 12,
-          borderLeft: "3px solid #378ADD",
+          borderLeft: "4px solid #1d4ed8",
           paddingLeft: 10,
         }}
       >
@@ -619,89 +676,90 @@ function ReportView({ data }: { data: ReportData }) {
   );
 }
 
-type DropRowProps = {
-  file: string;
+type ChecklistCardItem = (typeof CHECKLIST_ITEMS)[number];
+
+type ChecklistFileCardProps = {
+  item: ChecklistCardItem;
   uploaded?: UploadState;
-  isDragging: boolean;
-  onDragEnter: () => void;
-  onDragLeave: () => void;
-  onDrop: (files: FileList | null) => void;
   onPick: (files: FileList | null) => void;
   onRemove: () => void;
 };
 
-function DropRow({ file, uploaded, isDragging, onDragEnter, onDragLeave, onDrop, onPick, onRemove }: DropRowProps) {
+function ChecklistFileCard({ item, uploaded, onPick, onRemove }: ChecklistFileCardProps) {
+  const [hovered, setHovered] = useState(false);
   const ref = useRef<HTMLInputElement | null>(null);
+  const status = uploaded ? { text: "✅ Бүрэн", color: "#16a34a", bg: "#dcfce7" } : item.required ? { text: "❌ Байхгүй", color: "#dc2626", bg: "#fee2e2" } : { text: "⚠️ Хэсэгчлэн", color: "#d97706", bg: "#ffedd5" };
+
   return (
     <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        onDragEnter();
-      }}
-      onDragEnter={onDragEnter}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) onDragLeave();
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        onDrop(e.dataTransfer.files);
-      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        border: `1.5px dashed ${isDragging ? "#378ADD" : uploaded ? "#639922" : "var(--color-border-secondary)"}`,
-        borderRadius: "var(--border-radius-md)",
-        padding: "10px 14px",
-        background: isDragging ? "#E6F1FB" : uploaded ? "#EAF3DE" : "var(--color-background-secondary)",
-        transition: "all .18s",
+        background: "#fff",
+        border: `1px solid ${uploaded ? "#bbf7d0" : "#e2e8f0"}`,
+        borderRadius: 14,
+        padding: 14,
+        boxShadow: hovered ? "0 8px 22px rgba(15,23,42,0.10)" : "0 2px 8px rgba(15,23,42,0.06)",
+        transform: hovered ? "translateY(-1px)" : "translateY(0)",
+        transition: "all .2s ease",
       }}
     >
-      <span style={{ fontSize: 20 }}>{uploaded ? "✅" : "📂"}</span>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 500, fontSize: 13, color: "var(--color-text-primary)" }}>{file}</div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: item.iconBg, color: item.iconColor, display: "grid", placeItems: "center", fontSize: 18 }}>
+          {item.icon}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", wordBreak: "break-all" }}>{item.codeName}</div>
+          <div style={{ fontSize: 12.5, color: "#475569", marginTop: 2 }}>{item.description}</div>
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color: status.color, background: status.bg, borderRadius: 999, padding: "4px 10px", whiteSpace: "nowrap" }}>{status.text}</span>
+      </div>
+
+      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         {uploaded ? (
-          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: "#334155" }}>
             {uploaded.name} · {fmtSize(uploaded.size)}
           </div>
         ) : (
-          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", marginTop: 2 }}>Файл чирж оруулах эсвэл сонгох</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>Файл сонгоно уу</div>
+        )}
+        {!uploaded ? (
+          <button
+            onClick={() => ref.current?.click()}
+            style={{
+              marginLeft: "auto",
+              padding: "7px 14px",
+              borderRadius: 10,
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 700,
+              background: "#1d4ed8",
+              color: "#fff",
+              border: "1px solid #1d4ed8",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Файл оруулах
+          </button>
+        ) : (
+          <button
+            onClick={onRemove}
+            style={{
+              marginLeft: "auto",
+              padding: "7px 12px",
+              borderRadius: 10,
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 700,
+              background: "#fff1f2",
+              color: "#dc2626",
+              border: "1px solid #fecaca",
+            }}
+          >
+            Устгах
+          </button>
         )}
       </div>
-      {uploaded ? (
-        <button
-          onClick={onRemove}
-          style={{
-            padding: "4px 10px",
-            borderRadius: 6,
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 500,
-            background: "var(--color-background-danger)",
-            color: "var(--color-text-danger)",
-            border: "0.5px solid var(--color-border-danger)",
-          }}
-        >
-          Устгах
-        </button>
-      ) : (
-        <button
-          onClick={() => ref.current?.click()}
-          style={{
-            padding: "4px 12px",
-            borderRadius: 6,
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 500,
-            background: "var(--color-background-info)",
-            color: "var(--color-text-info)",
-            border: "0.5px solid var(--color-border-info)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          Сонгох
-        </button>
-      )}
       <input
         ref={ref}
         type="file"
@@ -724,21 +782,114 @@ export default function Home() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadMap>({});
   const [tab, setTab] = useState<TabKey>("checklist");
-  const [drag, setDrag] = useState<ChecklistKey | null>(null);
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<ReportData | null>(null);
   const [maskedCount, setMaskedCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadMsg, setLoadMsg] = useState("");
+  const [sessionExpiryText, setSessionExpiryText] = useState<string>("");
+  const [todayText, setTodayText] = useState("");
 
   const uploadedCount = Object.keys(uploads).length;
   const data = report || DEMO;
 
+  const requiredItems = CHECKLIST_ITEMS.filter((item) => item.required);
+  const requiredCompleted = requiredItems.filter((item) => uploads[item.key]).length;
+  const requiredMissing = requiredItems.length - requiredCompleted;
+  const completionPct = Math.round((uploadedCount / CHECKLIST_ITEMS.length) * 100);
+  const progressTone = uploadedCount === CHECKLIST_ITEMS.length ? { bg: "#dcfce7", bar: "#16a34a", txt: "#166534" } : uploadedCount === 0 ? { bg: "#fee2e2", bar: "#dc2626", txt: "#991b1b" } : { bg: "#ffedd5", bar: "#d97706", txt: "#92400e" };
+
+  const tabItems: [TabKey, string, string][] = [
+    ["checklist", "📋", "Checklist"],
+    ["report", "📊", "Тайлан"],
+    ["trend", "📈", "Trend"],
+    ["inflation", "🧮", "Инфляц"],
+    ["loan", "🏦", "Зээл"],
+    ["sales", "💼", "Борлуулалт"],
+  ];
+
+  const requiredFiles = CHECKLIST_ITEMS.filter((item) => item.section === "required");
+  const optionalFiles = CHECKLIST_ITEMS.filter((item) => item.section === "optional");
+
   useEffect(() => {
-    const ok = localStorage.getItem("admin-auth") === "true";
-    setIsAuthenticated(ok);
+    setTodayText(new Intl.DateTimeFormat("mn-MN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(new Date()));
+  }, []);
+
+  function toMongolianDateTime(ts: number) {
+    const d = new Date(ts);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${y}.${m}.${day} ${hh}:${mm}`;
+  }
+
+  function clearAuth() {
+    localStorage.removeItem(AUTH_KEY);
+    localStorage.removeItem(LAST_ACTIVITY_KEY);
+    setIsAuthenticated(false);
+    setSessionExpiryText("");
+    setLoginError(null);
+  }
+
+  function getLastActivity() {
+    const v = localStorage.getItem(LAST_ACTIVITY_KEY);
+    const n = v ? Number(v) : NaN;
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function touchActivity() {
+    if (!isAuthenticated) return;
+    const now = Date.now();
+    localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
+    setSessionExpiryText(toMongolianDateTime(now + INACTIVITY_TIMEOUT_MS));
+  }
+
+  useEffect(() => {
+    const ok = localStorage.getItem(AUTH_KEY) === "true";
+    if (!ok) {
+      setIsAuthenticated(false);
+      setAuthChecked(true);
+      return;
+    }
+
+    const last = getLastActivity();
+    const now = Date.now();
+    if (!last || now - last > INACTIVITY_TIMEOUT_MS) {
+      clearAuth();
+      setAuthChecked(true);
+      return;
+    }
+
+    setIsAuthenticated(true);
+    setSessionExpiryText(toMongolianDateTime(last + INACTIVITY_TIMEOUT_MS));
     setAuthChecked(true);
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const activityEvents: Array<keyof WindowEventMap> = ["click", "keydown", "mousemove", "scroll", "touchstart"];
+    const onActivity = () => touchActivity();
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, onActivity, { passive: true }));
+
+    const checkInterval = window.setInterval(() => {
+      const last = getLastActivity();
+      const now = Date.now();
+      if (!last || now - last > INACTIVITY_TIMEOUT_MS) {
+        clearAuth();
+        setLoginError("Сесс хугацаа дууссан. Дахин нэвтэрнэ үү.");
+        return;
+      }
+      setSessionExpiryText(toMongolianDateTime(last + INACTIVITY_TIMEOUT_MS));
+    }, 60 * 1000);
+
+    return () => {
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, onActivity));
+      window.clearInterval(checkInterval);
+    };
+  }, [isAuthenticated]);
 
   async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -757,8 +908,11 @@ export default function Home() {
         throw new Error(err?.error || "Нэвтрэх боломжгүй байна.");
       }
 
-      localStorage.setItem("admin-auth", "true");
+      const now = Date.now();
+      localStorage.setItem(AUTH_KEY, "true");
+      localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
       setIsAuthenticated(true);
+      setSessionExpiryText(toMongolianDateTime(now + INACTIVITY_TIMEOUT_MS));
       setPassword("");
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : "Нэвтрэхэд алдаа гарлаа.");
@@ -912,8 +1066,8 @@ export default function Home() {
         }
       }
 
-      const missing = CHECKLIST_ITEMS.filter((i) => !uploads[i.key]).map((i) => i.file);
-      content.push({ type: "text", text: `Дутуу файл: ${missing.length ? missing.join(", ") : "байхгүй"}. Шинжилж тайлан гарга.` });
+      const missing = CHECKLIST_ITEMS.filter((i) => i.required && !uploads[i.key]).map((i) => i.codeName);
+      content.push({ type: "text", text: `Дутуу заавал файл: ${missing.length ? missing.join(", ") : "байхгүй"}. Шинжилж тайлан гарга.` });
 
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -940,69 +1094,99 @@ export default function Home() {
     }
   }
 
-  const TABS: [TabKey, string][] = [
-    ["checklist", "📋 Checklist"],
-    ["report", "📊 Тайлан"],
-    ["trend", "📈 Trend"],
-    ["inflation", "3. Инфляц"],
-    ["loan", "4. Зээл"],
-    ["sales", "5. Борлуулалт"],
-  ];
-
   return (
-    <div style={{ fontFamily: "var(--font-sans)", background: "var(--color-background-tertiary)", minHeight: "100vh", padding: 20 }}>
-      <div style={{ background: "#042C53", color: "#fff", borderRadius: "var(--border-radius-lg)", padding: "18px 22px", marginBottom: 18 }}>
-        <div style={{ fontSize: 10, opacity: 0.6, letterSpacing: 2, textTransform: "uppercase" }}>AI Санхүүгийн Шинжилгээ</div>
-        <div style={{ fontSize: 20, fontWeight: 500, marginTop: 6 }}>Эрдэнэ Билгүүдэй ХХК</div>
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ flex: 1, height: 5, background: "rgba(255,255,255,.2)", borderRadius: 3 }}>
-            <div style={{ height: 5, width: fmtPct((uploadedCount / CHECKLIST_ITEMS.length) * 100), background: "#97C459", borderRadius: 3, transition: "width .4s" }} />
+    <div style={{ fontFamily: "'Inter', 'Segoe UI', sans-serif", background: "#f8fafc", minHeight: "100vh", padding: "16px clamp(12px,3vw,28px)" }}>
+      <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 16, padding: "16px clamp(12px,2.5vw,24px)", marginBottom: 14, boxShadow: "0 10px 24px rgba(15,23,42,0.06)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: "#dbeafe", color: "#1d4ed8", display: "grid", placeItems: "center", fontWeight: 800, fontSize: 17 }}>
+              ЭБ
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#64748b", letterSpacing: 1, textTransform: "uppercase" }}>AI Санхүүгийн Шинжилгээ</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#0f172a" }}>Эрдэнэ Билгүүдэй ХХК</div>
+              <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>{todayText}</div>
+            </div>
           </div>
-          <span style={{ fontSize: 12, opacity: 0.7 }}>
-            {uploadedCount}/{CHECKLIST_ITEMS.length} файл
-          </span>
-          {report && <span style={{ fontSize: 11, background: "#3B6D11", padding: "2px 8px", borderRadius: 12, fontWeight: 500 }}>AI тайлан бэлэн</span>}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+            <span style={{ fontSize: 12, color: "#64748b" }}>Сесс дуусах хугацаа: {sessionExpiryText || "-"}</span>
+            <span style={{ fontSize: 12, color: "#334155", background: "#f1f5f9", borderRadius: 999, padding: "4px 10px", fontWeight: 600 }}>
+              {uploadedCount}/{CHECKLIST_ITEMS.length} файл
+            </span>
+          </div>
+          <button
+            onClick={clearAuth}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 10,
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#0f172a",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Гарах
+          </button>
+        </div>
+
+        <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#334155", fontWeight: 600 }}>
+            <span>Нийт файлын явц</span>
+            <span>{completionPct}%</span>
+          </div>
+          <div style={{ height: 12, background: "#e2e8f0", borderRadius: 999 }}>
+            <div style={{ height: 12, width: `${completionPct}%`, background: "#1d4ed8", borderRadius: 999, transition: "width .35s ease" }} />
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
+            Заавал файл: {requiredCompleted}/{requiredItems.length} · Дутуу: {requiredMissing}
+          </div>
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-        {TABS.map(([k, l]) => (
-          <button
-            key={k}
-            onClick={() => setTab(k)}
-            style={{
-              padding: "7px 14px",
-              borderRadius: 8,
-              border: "0.5px solid var(--color-border-secondary)",
-              cursor: "pointer",
-              fontWeight: tab === k ? 500 : 400,
-              fontSize: 13,
-              background: tab === k ? "var(--color-background-primary)" : "var(--color-background-secondary)",
-              color: tab === k ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-            }}
-          >
-            {l}
-          </button>
-        ))}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          {loading && <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{loadMsg}</span>}
-          {!loading && uploadedCount > 0 && (
+      <div style={{ position: "sticky", top: 8, zIndex: 20, background: "#f8fafc", paddingBottom: 10, marginBottom: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {tabItems.map(([k, icon, label]) => (
             <button
-              onClick={analyze}
+              key={k}
+              onClick={() => setTab(k)}
               style={{
-                padding: "7px 18px",
-                borderRadius: 8,
-                border: "0.5px solid #185FA5",
-                background: "#E6F1FB",
-                color: "#0C447C",
-                fontWeight: 500,
-                fontSize: 13,
+                padding: "9px 14px",
+                borderRadius: 999,
+                border: tab === k ? "1px solid #1d4ed8" : "1px solid #dbe2ea",
+                borderBottom: tab === k ? "3px solid #1d4ed8" : "1px solid #dbe2ea",
                 cursor: "pointer",
+                fontWeight: tab === k ? 700 : 500,
+                fontSize: 13,
+                background: tab === k ? "#dbeafe" : "#fff",
+                color: tab === k ? "#1d4ed8" : "#334155",
+                boxShadow: tab === k ? "0 4px 12px rgba(29,78,216,0.15)" : "0 2px 6px rgba(15,23,42,0.04)",
               }}
             >
-              AI шинжилгээ ↗
+              {icon} {label}
             </button>
-          )}
+          ))}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            {loading && <span style={{ fontSize: 12, color: "#64748b" }}>{loadMsg}</span>}
+            {!loading && uploadedCount > 0 && (
+              <button
+                onClick={analyze}
+                style={{
+                  padding: "9px 18px",
+                  borderRadius: 999,
+                  border: "1px solid #1d4ed8",
+                  background: "#1d4ed8",
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                AI шинжилгээ
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1042,32 +1226,34 @@ export default function Home() {
         <Card title="📋 ФАЙЛ БҮРДЭЛТИЙН CHECKLIST">
           <div
             style={{
-              background: "var(--color-background-warning)",
-              borderRadius: "var(--border-radius-md)",
-              padding: "10px 14px",
+              background: progressTone.bg,
+              borderRadius: 12,
+              padding: "12px 14px",
               fontSize: 13,
-              color: "var(--color-text-warning)",
+              color: progressTone.txt,
               marginBottom: 14,
             }}
           >
-            Файл нэмээд <b>AI шинжилгээ</b> товч дарна уу. Ямар ч төрлийн файл оруулж болно.
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", fontWeight: 700 }}>
+              <span>{uploadedCount}/5 файл бүрдсэн</span>
+              <span>{completionPct}%</span>
+            </div>
+            <div style={{ marginTop: 8, height: 10, background: "#e2e8f0", borderRadius: 999 }}>
+              <div style={{ height: 10, width: `${completionPct}%`, background: progressTone.bar, borderRadius: 999, transition: "width .35s ease" }} />
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {CHECKLIST_ITEMS.map(({ file, key }) => (
-              <DropRow
-                key={key}
-                file={file}
-                uploaded={uploads[key]}
-                isDragging={drag === key}
-                onDragEnter={() => setDrag(key)}
-                onDragLeave={() => setDrag(null)}
-                onDrop={(f) => {
-                  setDrag(null);
-                  assign(key, f);
-                }}
-                onPick={(f) => assign(key, f)}
-                onRemove={() => removeFile(key)}
-              />
+
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 10 }}>📊 Үндсэн файлууд</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10, marginBottom: 18 }}>
+            {requiredFiles.map((item) => (
+              <ChecklistFileCard key={item.key} item={item} uploaded={uploads[item.key]} onPick={(f) => assign(item.key, f)} onRemove={() => removeFile(item.key)} />
+            ))}
+          </div>
+
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 10 }}>📋 Нэмэлт файлууд</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
+            {optionalFiles.map((item) => (
+              <ChecklistFileCard key={item.key} item={item} uploaded={uploads[item.key]} onPick={(f) => assign(item.key, f)} onRemove={() => removeFile(item.key)} />
             ))}
           </div>
         </Card>
