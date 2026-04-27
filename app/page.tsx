@@ -62,6 +62,13 @@ type AnthropicContentBlock = {
   };
 };
 
+type AnalyzeApiResponse = {
+  report: ReportData;
+  maskingSummary?: {
+    maskedCount: number;
+  };
+};
+
 const fmt = (n: number) => "₮" + Math.round(n).toLocaleString("mn-MN");
 const fmtPct = (n: number) => (Math.round(n * 10) / 10).toFixed(1) + "%";
 const fmtSize = (b: number) => (b < 1048576 ? (b / 1024).toFixed(1) + "KB" : (b / 1048576).toFixed(1) + "MB");
@@ -720,6 +727,7 @@ export default function Home() {
   const [drag, setDrag] = useState<ChecklistKey | null>(null);
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<ReportData | null>(null);
+  const [maskedCount, setMaskedCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadMsg, setLoadMsg] = useState("");
 
@@ -879,6 +887,7 @@ export default function Home() {
 
     setLoading(true);
     setError(null);
+    setMaskedCount(null);
     const msgs = ["📂 Файл уншиж байна...", "🔍 Өгөгдөл задлаж байна...", "🤖 AI шинжилж байна...", "📊 Тайлан бэлтгэж байна..."];
     let mi = 0;
     setLoadMsg(msgs[0]);
@@ -919,8 +928,9 @@ export default function Home() {
         throw new Error(err?.error || "Шинжилгээний API алдаа");
       }
 
-      const d = await res.json();
+      const d = (await res.json()) as AnalyzeApiResponse;
       setReport(d.report);
+      setMaskedCount(d.maskingSummary?.maskedCount ?? 0);
       setTab("report");
     } catch (e) {
       setError("AI шинжилгээ амжилтгүй: " + (e instanceof Error ? e.message : "Тодорхойгүй алдаа"));
@@ -1009,6 +1019,22 @@ export default function Home() {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {report && maskedCount !== null && (
+        <div
+          style={{
+            background: "var(--color-background-success)",
+            border: "0.5px solid var(--color-border-success)",
+            borderRadius: "var(--border-radius-md)",
+            padding: "10px 14px",
+            marginBottom: 14,
+            fontSize: 13,
+            color: "var(--color-text-success)",
+          }}
+        >
+          {maskedCount} мэдээлэл хамгаалагдлаа 🔒
         </div>
       )}
 

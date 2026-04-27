@@ -8,6 +8,87 @@ type AnalyzeRequestBlock = {
   };
 };
 
+function maskKeepTail(value: string, keep = 4) {
+  const chars = value.split("");
+  let digitSeen = 0;
+  for (let i = chars.length - 1; i >= 0; i -= 1) {
+    if (/\d/.test(chars[i])) {
+      digitSeen += 1;
+      if (digitSeen > keep) chars[i] = "*";
+    }
+  }
+  return chars.join("");
+}
+
+function applyMask(
+  input: string,
+  pattern: RegExp,
+  replacer: (...args: Parameters<string["replace"]>[1] extends (...a: infer A) => string ? A : never) => string
+) {
+  let count = 0;
+  const output = input.replace(pattern, (...args) => {
+    const original = args[0] as string;
+    const masked = replacer(...(args as never));
+    if (masked !== original) count += 1;
+    return masked;
+  });
+  return { output, count };
+}
+
+function sanitizeText(text: string) {
+  let cleaned = text;
+  let maskedCount = 0;
+
+  // Монгол регистрийн дугаарын хэв маяг (ж: УБ99112233)
+  {
+    const result = applyMask(cleaned, /\b([А-ЯӨҮЁ]{2}\d{8}|[A-Z]{2}\d{8})\b/giu, (match) => `${match.slice(0, 2)}******${match.slice(-2)}`);
+    cleaned = result.output;
+    maskedCount += result.count;
+  }
+
+  // Утасны дугаар (+976, 976 болон 8 оронтой)
+  {
+    const result = applyMask(cleaned, /\b(?:\+976|976)?[\s-]?\d{8}\b/g, (match) => maskKeepTail(match, 4));
+    cleaned = result.output;
+    maskedCount += result.count;
+  }
+
+  // Данс/акаунтын дугаар (түлхүүр үгийн дараах урт тоон утга)
+  {
+    const result = applyMask(
+      cleaned,
+      /\b(данс(?:ны)?|account|acct|iban)\b([^\n\r]{0,40}?)(\d[\d\s-]{7,30}\d)\b/giu,
+      (_full, label: string, middle: string, digits: string) => `${label}${middle}${maskKeepTail(digits, 4)}`
+    );
+    cleaned = result.output;
+    maskedCount += result.count;
+  }
+
+  // Ерөнхий урт дугаарууд (12+ цифр) - ихэвчлэн банк/баримтын дугаар
+  {
+    const result = applyMask(cleaned, /\b\d[\d\s-]{10,}\d\b/g, (match) => {
+      const digitCount = (match.match(/\d/g) || []).length;
+      if (digitCount < 12) return match;
+      return maskKeepTail(match, 4);
+    });
+    cleaned = result.output;
+    maskedCount += result.count;
+  }
+
+  return { cleaned, maskedCount };
+}
+
+function sanitizeContent(content: AnalyzeRequestBlock[]) {
+  let totalMasked = 0;
+  const sanitized = content.map((block) => {
+    if (block.type !== "text" || !block.text) return block;
+    const result = sanitizeText(block.text);
+    totalMasked += result.maskedCount;
+    return { ...block, text: result.cleaned };
+  });
+  return { sanitized, totalMasked };
+}
+
 const SYSTEM_PROMPT = `Та Эрдэнэ Билгүүдэй ХХК-ийн санхүүгийн шинжээч. Файлуудыг шинжилж зөвхөн JSON буцаа.
 {
   "summary":{"totalIncome":number,"totalExpense":number,"profit":number,"profitPct":number},
@@ -35,6 +116,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "Хоосон эсвэл буруу content ирсэн байна." }, { status: 400 });
     }
 
+    const { sanitized: sanitizedContent, totalMasked } = sanitizeContent(content);
+
     const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -46,7 +129,7 @@ export async function POST(request: Request) {
         model: "claude-sonnet-4-20250514",
         max_tokens: 1000,
         system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content }],
+        messages: [{ role: "user", content: sanitizedContent }],
       }),
     });
 
@@ -63,7 +146,7 @@ export async function POST(request: Request) {
     const clean = raw.replace(/```json|```/g, "").trim();
     const report = JSON.parse(clean);
 
-    return Response.json({ report });
+    return Response.json({ report, maskingSummary: { maskedCount: totalMasked } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Тодорхойгүй алдаа";
     return Response.json({ error: `AI шинжилгээ амжилтгүй: ${message}` }, { status: 500 });
